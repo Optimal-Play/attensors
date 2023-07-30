@@ -1,6 +1,6 @@
 <p align="center">
     <picture>
-        <img src="https://raw.githubusercontent.com/Optimal-Play/attensors/main/docs/_static/logo.png" alt="attensors" />
+        <img src="./docs/_static/logo.png" alt="attensors" />
     </picture>
 </p>
 
