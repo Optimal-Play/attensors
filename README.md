@@ -5,5 +5,3 @@
 </p>
 
 Using attrs and numpy to define clear data structures containing multiple tensors
-
-Font used for logo is `Kanit medium italic`
