@@ -1,56 +1,9 @@
+from functools import partial
 from typing import _AnnotatedAlias, Annotated, Any
+from attrs import define, field, fields
+
 import attrs
-from attrs import define, field, fields, asdict
-
 import numpy as np
-
-
-class _TensorsMetaclass(type):
-    mapped_methods = ['reshape', ]
-    mapped_args = ['shape', 'dtype']
-
-    def __getattr__(cls, key):
-        def mapped_method(method, *args, **kwargs):
-            for arg_name in kwargs:
-                if arg_name not in cls.mapped_args:
-                    raise TypeError(f"{cls.__name__} got an unexpected keyword argument {arg_name}")
-
-            return cls(**{
-                field.name: method(*args, **kwargs, 
-                    shape=(kwargs, field.metadata.shape)) 
-                for field in fields(cls)
-            })
-
-        callable = lambda method: bool(getattr(method, '__call__', None))
-
-        method = getattr(np, key, None)
-        
-        if method is None or not callable(method):
-            raise AttributeError(f"{cls.__name__} has no attribute {key}")
-        
-        return lambda *args, **kwargs: 
-            cls(**{
-                field.name: method(*args, **kwargs, 
-                    shape=(kwargs, field.metadata.shape)) 
-                for field in fields(cls)
-            })
-
-    @staticmethod
-    def mapped_method(method):
-        return lambda *args, **kwargs: \
-            cls(**{
-                field.name: method(*args, **kwargs, 
-                    shape=(kwargs, field.metadata.shape)) 
-                for field in fields(cls)
-            })
-
-    @staticmethod
-    def callable(method):
-        return bool(getattr(method, '__call__', None))
-
-    @staticmethod
-    def get_attribute(cls, key):
-        pass
 
 
 def on_setattr(instance, attrib, new_value):
@@ -58,8 +11,45 @@ def on_setattr(instance, attrib, new_value):
         return setattr(instance, attrib.name, new_value)
     instance[attrib.name] = new_value
 
+
+class _TensorsMetaclass(type):
+    def __init__(cls, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        mapped_methods = [
+            # array creation routines
+            'empty', 'empty_like', 'ones', 'ones_like', 
+            'zeros', 'zeros_like', 'full', 'full_like',
+            # array manipulation routines
+            'concatenate', 'stack',
+            'reshape', 'ravel', 
+            # padding
+            'pad'
+        ]
+
+        for method in mapped_methods:
+            setattr(cls, method, cls.get_implementation(method))
+
+    def get_implementation(cls, method):
+        def mapped_method(method, *args, **kwargs):
+            if 'subok' in kwargs:
+                raise TypeError(f"{cls.__name__}.{method.__name__} got an unexpected keyword argument 'subok'")
+
+            if cls is not Tensors:
+                if 'dtype' in kwargs:
+                    raise TypeError(f"{cls.__name__}.{method.__name__} got an unexpected keyword argument 'dtype'")
+                kwargs['dtype'] = cls._dtype
+            else:
+                if 'dtype' not in kwargs or np.dtype(kwargs['dtype']).names is None:
+                    raise TypeError(f"{cls.__name__}.{method.__name__} requires a structured dtype")
+    
+            return method(*args, **kwargs).view(cls)
+
+        return partial(mapped_method, getattr(np, method))
+
+
 @define(slots=False, on_setattr=on_setattr)
-class Tensors(np.ndarray):
+class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
     """
     Subclasses of Tensors are expected to be attrs type classes, decorated with the provided 
     `@tensors` or through attrs' `@define` decorator and the required config, therefore:
@@ -98,8 +88,6 @@ class Tensors(np.ndarray):
         return np.asarray(mapped_inputs, dtype=cls._dtype).view(cls)
 
     def __init__(self, *args, **kwargs):
-        self.dict = {k: self[k] for k in self.dtype.names}
-
         if all([getattr(self, field.name, None) is not None for field in fields(self.__class__)]):
             return
         
@@ -137,9 +125,17 @@ class Tensors(np.ndarray):
 
         self.__init__()
 
+    def asdict(self):
+        if not hasattr(self, '_dict'):
+            self._dict = {k: self[k] for k in self.dtype.names}
+        return self._dict
+
     @classmethod
     def broadcast_tensors(cls, *args):
         tensors = [arg for arg in args if isinstance(arg, Tensors)]
+        if not len(tensors):
+            raise ValueError("No tensors found in arguments.")
+        init_dtype = tensors[0].dtype
         fields = set(arg.dtype.names for arg in tensors)
         if len(fields) > 1:
             raise ValueError("Cannot broadcast tensors with different fields.")
@@ -159,6 +155,8 @@ class Tensors(np.ndarray):
                     fn: np.broadcast_to(arg, (*outer_shape, *fshape))
                     for fn, fshape in zip(field_names, field_shapes)
                 }, shape=outer_shape).view(cls)
+            elif arg.dtype == init_dtype:
+                arg = np.broadcast_to(arg, outer_shape, subok=True)
             else:
                 arg_fields = {}
 
@@ -168,7 +166,7 @@ class Tensors(np.ndarray):
                     arg_fields[fn] = arg[fn][(*outer_slices, *expand_dims, ...)]
 
                 arg = Tensors(**{
-                    fn: np.broadcast_to(arg_fields[fn], (*outer_shape, *fshape))
+                    fn: np.broadcast_to(arg_fields[fn], (*outer_shape, *fshape), subok=True)
                     for fn, fshape in zip(field_names, field_shapes)
                 }, shape=outer_shape).view(cls)
 
@@ -183,22 +181,19 @@ class Tensors(np.ndarray):
             return self.__class__(**{
                 field_name: super(Tensors, self).__array_ufunc__(ufunc, method, *[i[field_name] for i in broadcasted], **kwargs)
                 for field_name in self.dtype.names
-            }, shape=broadcasted[0].shape)
+            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
         elif ufunc.nout > 1:
             results = {
                 field_name: super(Tensors, self).__array_ufunc__(ufunc, method, *[i[field_name]for i in broadcasted], **kwargs)
                 for field_name in self.dtype.names
             }
             return (self.__class_(**{
-                }, shape=broadcasted[0].shape) for res in results)
+                field_name: results[field_name][i] 
+                for field_name in self.dtype.names
+            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
+            for i in range(len(list(results.values)[0])))
 
         return super(Tensors, self).__array_ufunc__(ufunc, method, *inputs, **kwargs)
-
-    # def __array_prepare__(self, array: np.ndarray[np._ShapeType2, np._DType], context: Union[None, tuple[np.ufunc, tuple[Any, ...], int]] = ..., /) -> np.ndarray[np._ShapeType2, np._DType]:
-    #     return super().__array_prepare__(array, context)
-
-    # def __array_wrap__(self, array: np.ndarray[np._ShapeType2, np._DType], context: Union[None, tuple[np.ufunc, tuple[Any, ...], int]] = ..., /) -> np.ndarray[np._ShapeType2, np._DType]:
-    #     return super().__array_wrap__(array, context)
 
     @classmethod
     def __base_constructor__(cls, inputs, shape, dtype, mc_shape):
