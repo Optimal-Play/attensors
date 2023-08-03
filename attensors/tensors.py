@@ -33,11 +33,13 @@ class _TensorsMetaclass(type):
     def get_implementation(cls, method):
         def mapped_method(method, *args, **kwargs):
             if 'subok' in kwargs:
-                raise TypeError(f"{cls.__name__}.{method.__name__} got an unexpected keyword argument 'subok'")
+                raise TypeError(f"{cls.__name__}.{method.__name__} " + \ 
+                    "got an unexpected keyword argument 'subok'")
 
             if cls is not Tensors:
                 if 'dtype' in kwargs:
-                    raise TypeError(f"{cls.__name__}.{method.__name__} got an unexpected keyword argument 'dtype'")
+                    raise TypeError(f"{cls.__name__}.{method.__name__} " + \
+                        "got an unexpected keyword argument 'dtype'")
                 kwargs['dtype'] = cls._dtype
             else:
                 if 'dtype' not in kwargs or np.dtype(kwargs['dtype']).names is None:
@@ -50,11 +52,28 @@ class _TensorsMetaclass(type):
 
 @define(slots=False, on_setattr=on_setattr)
 class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
-    """
-    Subclasses of Tensors are expected to be attrs type classes, decorated with the provided 
-    `@tensors` or through attrs' `@define` decorator and the required config, therefore:
+    """Extension of np.ndarray. 
+    Essentially, a structured array with defined rules for universal functions and 
+    some shortcuts to common numpy functions, providing already known arguments (e.g. dtype, subok).
 
-    Arguments `shape`, `dtype`, `mc_shape` are not available for subclasses of Tensors.
+    Subclasses of Tensors are expected to be attrs type classes. Subclassing is done by using
+    the `@tensors` decorator. Alternatively, attrs' `@define` decorator can also be used, but
+    it would be required to add specific configurations to function as intended - which `@tensors`
+    already provides.
+
+    Directly instantiating Tensors is possible. In this case, you provide the fields and values
+    you want as keyword arguments. Either `shape` or `dtype` must be provided. Providing one 
+    will cause the other to be inferred. 
+    If only `shape` is provided, this will be considered the shape of the instance, which must
+    prefix all included tensors shapes. The `dtype` will be inferred based on the provided values.
+    If only `dtype` is provided, the instance's `shape` will be considered () as long as `mc_shape`
+    is False. If `mc_shape` is set to True, the instance's `shape` will be computed as the 
+    maximum common shape amongst the provided values, while respecting the provided `dtype`.
+    Providing both is exhaustive and will cause validation of the provided `shape` as `dtype`
+    takes precedence.
+
+    Arguments `shape`, `dtype`, `mc_shape` are NOT available for subclasses of Tensors.
+    Instead, the dtype is inferred from the class fields information (type and metadata).
 
     Args:
         *args: Positional input tensors
@@ -68,7 +87,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
     def __new__(cls, *args, shape=None, dtype=None, mc_shape=None, **kwargs):
         for key in kwargs.keys():
             if hasattr(np.ndarray, key):
-                raise TypeError(f"`{key}` is a numpy ndarray reserved attribute and cannot be used.")
+                raise TypeError(f"`{key}` is a np.ndarray reserved attribute and cannot be used.")
 
         inputs = {
             **({f'f{i}': np.asarray(arg) for i, arg in enumerate(args)} if not fields(cls) else
@@ -77,9 +96,11 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         }
 
         if cls is Tensors:
-            inputs, cls._dtype, shape = cls.__base_constructor__(inputs, shape=shape, dtype=dtype, mc_shape=mc_shape)
+            inputs, cls._dtype, shape = cls.__base_constructor__(
+                inputs, shape=shape, dtype=dtype, mc_shape=mc_shape)
         else:
-            inputs, cls._dtype, shape = cls.__subclass_constructor__(inputs, shape=shape, dtype=dtype, mc_shape=mc_shape)
+            inputs, cls._dtype, shape = cls.__subclass_constructor__(
+                inputs, shape=shape, dtype=dtype, mc_shape=mc_shape)
 
         inputs = {k: inputs[k] for k in cls._dtype.names}
 
@@ -94,6 +115,17 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         self.__attrs_init__(**{
             field.name: self[field.name] for field in fields(self.__class__)
         })
+
+    def __array_finalize__(self, obj) -> None:
+        if obj is None: return
+
+        if type(self) == Tensors:
+            return
+
+        if self._dtype != self.dtype:
+            return
+
+        self.__init__()
 
     def __getitem__(self, key):
         ret = super().__getitem__(key)
@@ -114,21 +146,133 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         return f"{self.__class__.__name__}" + "([" + \
             ", ".join([f"{k}={repr(self[k])}" for k in self.dtype.names]) + "])" 
 
-    def __array_finalize__(self, obj) -> None:
-        if obj is None: return
-
-        if type(self) == Tensors:
-            return
-
-        if self._dtype != self.dtype:
-            return
-
-        self.__init__()
-
     def asdict(self):
         if not hasattr(self, '_dict'):
             self._dict = {k: self[k] for k in self.dtype.names}
         return self._dict
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs) -> Any:
+        broadcasted = self.broadcast_tensors(*inputs)
+
+        if ufunc.nout < 2 or method != "__call__":
+            return self.__class__(**{
+                field_name: super(Tensors, self).__array_ufunc__(
+                    ufunc, method, *[i[field_name] for i in broadcasted], **kwargs)
+                for field_name in self.dtype.names
+            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
+        elif ufunc.nout > 1:
+            results = {
+                field_name: super(Tensors, self).__array_ufunc__(
+                    ufunc, method, *[i[field_name]for i in broadcasted], **kwargs)
+                for field_name in self.dtype.names
+            }
+            return (self.__class_(**{
+                field_name: results[field_name][i] 
+                for field_name in self.dtype.names
+            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
+            for i in range(len(list(results.values)[0])))
+
+        return super(Tensors, self).__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
+    @classmethod
+    def __base_constructor__(cls, inputs, shape, dtype, mc_shape):
+        if len(inputs) == 0:
+                raise TypeError("Tensors() takes at least one argument (0 given)")
+
+        if dtype:
+            if not isinstance(dtype, np.dtype):
+                dtype = np.dtype(dtype)
+            if not dtype.fields:
+                raise TypeError(f"Invalid or non-structured dtype {dtype}")
+
+        def common_shape(inputs):
+            shape = ()
+            for dims in zip(*[i.shape for i in inputs.values()]):
+                dims = set(dims)
+                if len(dims) > 1:
+                    return shape
+                shape = (*shape, list(dims)[0])
+            return shape
+
+        def external_shape(inputs, dtype):
+            first = list(inputs.values())[0]
+            first_dt_shape = list(dtype.fields.values())[0][0].shape
+            split = -len(first_dt_shape) if len(first_dt_shape) else len(first.shape)
+            return first.shape[:split]
+
+        try:
+            shape = shape or (external_shape(inputs, dtype) if dtype else None)
+            shape = shape or (common_shape(inputs) if mc_shape else ())
+            dtype = dtype or np.dtype([
+                (name, value.dtype, value.shape[len(shape):])
+                for name, value in inputs.items() 
+            ])
+        except:
+            raise TypeError(f"Shape mismatch. " + \
+                "Given shape should correspond to the shape prefix of each input array.")
+
+        if any([v.shape[:len(shape)] != shape or v.shape[len(shape):] != dtype[fn].shape
+                for fn, v in inputs.items()]):
+            raise TypeError(f"Shape mismatch. " + \
+                "Given shape should correspond to the shape prefix of each input array.")
+
+        return inputs, dtype, shape
+
+    @classmethod
+    def __subclass_constructor__(cls, inputs, shape, dtype, mc_shape):
+        cls_dtype = cls._dtype if hasattr(cls, "_dtype") else cls.__infer_dtype__()
+
+        fieldnames = [field.name for field in fields(cls)]
+        kwds = list(inputs.keys()) + \
+            (['shape'] if shape is not None else []) + \
+            (['dtype'] if dtype is not None else []) + \
+            (['mc_shape'] if mc_shape is not None else [])
+        if set(kwds) - set(fieldnames) != set():
+            unexpected_arg = list(set(kwds) - set(fieldnames))[0]
+            raise TypeError(f"__init__() got an unexpected keyword argument '{unexpected_arg}'")
+
+        n_args = len(inputs)
+        n_required_args = len([f for f in fields(cls) if f.default is attrs.NOTHING])
+        if n_args < n_required_args:
+            raise TypeError(f"{cls.__name__} expected {n_required_args} arguments, got {n_args}")
+
+        ext_shapes = []
+        for f, v in inputs.items():
+            split = len(v.shape) if not len(cls_dtype[f].shape) else -len(cls_dtype[f].shape)
+            if v.shape[split:] != cls_dtype[f].shape:
+                raise TypeError(f"Shape mismatch. " + \
+                    "Given shape should correspond to the shape prefix of each input array.")
+            ext_shapes.append(v.shape[:split])
+        
+        ext_shapes = set(ext_shapes)
+        if len(ext_shapes) > 1:
+            raise TypeError(f"Shape mismatch. " + \
+                "Given shape should correspond to the shape prefix of each input array.")
+
+        return inputs, cls_dtype, list(ext_shapes)[0]
+
+    @classmethod
+    def __infer_dtype__(cls) -> np.dtype:
+        if not attrs.has(cls):
+            raise TypeError(f"{cls.__name__} " + \
+                "is not an attrs class (underlying dtype cannot be inferred)")
+
+        return np.dtype([
+                (field.name, 
+                field.metadata.get("dtype", None) or field.type
+                if not issubclass(field.type, Tensors) else field.type.dtype,
+                field.metadata.get("shape", ()))
+                for field in fields(cls)
+            ])
+
+    @classmethod
+    def __map_inputs__(cls, inputs, shape):            
+        def tolist(arrays, shape):
+            if len(shape) < 1:
+                return tuple(arrays)
+            return [tolist(tuple(a[i,...] for a in arrays), shape[1:]) for i in range(shape[0])]
+
+        return tolist(tuple(inputs.values()), shape)
 
     @classmethod
     def broadcast_tensors(cls, *args):
@@ -174,122 +318,6 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
 
         return broadcasted
 
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs) -> Any:
-        broadcasted = self.broadcast_tensors(*inputs)
-
-        if ufunc.nout < 2 or method != "__call__":
-            return self.__class__(**{
-                field_name: super(Tensors, self).__array_ufunc__(ufunc, method, *[i[field_name] for i in broadcasted], **kwargs)
-                for field_name in self.dtype.names
-            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
-        elif ufunc.nout > 1:
-            results = {
-                field_name: super(Tensors, self).__array_ufunc__(ufunc, method, *[i[field_name]for i in broadcasted], **kwargs)
-                for field_name in self.dtype.names
-            }
-            return (self.__class_(**{
-                field_name: results[field_name][i] 
-                for field_name in self.dtype.names
-            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
-            for i in range(len(list(results.values)[0])))
-
-        return super(Tensors, self).__array_ufunc__(ufunc, method, *inputs, **kwargs)
-
-    @classmethod
-    def __base_constructor__(cls, inputs, shape, dtype, mc_shape):
-        if len(inputs) == 0:
-                raise TypeError("Tensors() takes at least one argument (0 given)")
-
-        if dtype:
-            if not isinstance(dtype, np.dtype):
-                dtype = np.dtype(dtype)
-            if not dtype.fields:
-                raise TypeError(f"Invalid or non-structured dtype {dtype}")
-
-        def common_shape(inputs):
-            shape = ()
-            for dims in zip(*[i.shape for i in inputs.values()]):
-                dims = set(dims)
-                if len(dims) > 1:
-                    return shape
-                shape = (*shape, list(dims)[0])
-            return shape
-
-        def external_shape(inputs, dtype):
-            first = list(inputs.values())[0]
-            first_dt_shape = list(dtype.fields.values())[0][0].shape
-            split = -len(first_dt_shape) if len(first_dt_shape) else len(first.shape)
-            return first.shape[:split]
-
-        try:
-            shape = shape or (external_shape(inputs, dtype) if dtype else None)
-            shape = shape or (common_shape(inputs) if mc_shape else ())
-            dtype = dtype or np.dtype([
-                (name, value.dtype, value.shape[len(shape):])
-                for name, value in inputs.items() 
-            ])
-        except:
-            raise TypeError(f"Shape mismatch. Given shape should correspond to the shape prefix of each input array.")
-
-        if any([v.shape[:len(shape)] != shape or v.shape[len(shape):] != dtype[fn].shape
-                for fn, v in inputs.items()]):
-            raise TypeError(f"Shape mismatch. Given shape should correspond to the shape prefix of each input array.")
-
-        return inputs, dtype, shape
-
-    @classmethod
-    def __subclass_constructor__(cls, inputs, shape, dtype, mc_shape):
-        cls_dtype = cls._dtype if hasattr(cls, "_dtype") else cls.__infer_dtype__()
-
-        fieldnames = [field.name for field in fields(cls)]
-        kwds = list(inputs.keys()) + \
-            (['shape'] if shape is not None else []) + \
-            (['dtype'] if dtype is not None else []) + \
-            (['mc_shape'] if mc_shape is not None else [])
-        if set(kwds) - set(fieldnames) != set():
-            unexpected_arg = list(set(kwds) - set(fieldnames))[0]
-            raise TypeError(f"__init__() got an unexpected keyword argument '{unexpected_arg}'")
-
-        n_args = len(inputs)
-        n_required_args = len([f for f in fields(cls) if f.default is attrs.NOTHING])
-        if n_args < n_required_args:
-            raise TypeError(f"{cls.__name__} expected {n_required_args} arguments, got {n_args}")
-
-        ext_shapes = []
-        for f, v in inputs.items():
-            split = len(v.shape) if not len(cls_dtype[f].shape) else -len(cls_dtype[f].shape)
-            if v.shape[split:] != cls_dtype[f].shape:
-                raise TypeError(f"Shape mismatch. Given shape should correspond to the shape prefix of each input array.")
-            ext_shapes.append(v.shape[:split])
-        
-        ext_shapes = set(ext_shapes)
-        if len(ext_shapes) > 1:
-            raise TypeError(f"Shape mismatch. Given shape should correspond to the shape prefix of each input array.")
-
-        return inputs, cls_dtype, list(ext_shapes)[0]
-
-    @classmethod
-    def __infer_dtype__(cls) -> np.dtype:
-        if not attrs.has(cls):
-            raise TypeError(f"{cls.__name__} is not an attrs class (underlying dtype can't be inferred)")
-
-        return np.dtype([
-                (field.name, 
-                field.metadata.get("dtype", None) or field.type
-                if not issubclass(field.type, Tensors) else field.type.dtype,
-                field.metadata.get("shape", ()))
-                for field in fields(cls)
-            ])
-
-    @classmethod
-    def __map_inputs__(cls, inputs, shape):            
-        def tolist(arrays, shape):
-            if len(shape) < 1:
-                return tuple(arrays)
-            return [tolist(tuple(a[i,...] for a in arrays), shape[1:]) for i in range(shape[0])]
-
-        return tolist(tuple(inputs.values()), shape)
-
     @staticmethod
     def annotations_as_metadata(cls, fields):
         """Attrs field transformer function to convert annotated fields to metadata.
@@ -312,7 +340,23 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         return annotated_fields
 
     @staticmethod
-    def tensors(maybe_cls=None, **kwargs):
+    def define(maybe_cls=None, **kwargs):
+        """Is a wrapper around attrs `@define` decorator which also subclasses the decorated class
+        from Tensors.
+
+        Using this decorator will also translate annotated fields to metadata.
+        Annotated fields are expected to have a dictionary metadata with `dtype` and `shape` 
+        defined.
+
+        All arguments available for `@define` are forwarded, with the exception of the following:
+        - slots: forced to False due to Tensors being a subclass of np.ndarray
+        - init: forced to False due to Tensors having a dedicated constructor which 
+            handles expected attr wrapped subclasses
+        - on_setattr: makes sure setting attributes are mapped to the underlying np.ndarray fields.
+            Adding more is possible as attrs supports this
+        - field_transformer: default field transformer to translate annotated fields to metadata
+            Adding more is possible and works in the same manner as on_setattr
+        """
         if 'slots' in kwargs or 'init' in kwargs:
             raise TypeError("Slots and init are forced to False for Tensors subclasses.")
 
@@ -333,12 +377,13 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
 
         chained_field_transformer = \
             Tensors.annotations_as_metadata if "field_transformer" not in kwargs else \
-            lambda cls, fields: kwargs["field_transformer"](cls, Tensors.annotations_as_metadata(cls, fields)) 
+            lambda cls, fields: kwargs["field_transformer"](cls, 
+                Tensors.annotations_as_metadata(cls, fields)) 
 
         if not maybe_cls:
             return lambda maybe_cls: decorate(maybe_cls, chained_field_transformer)
 
         return decorate(maybe_cls, chained_field_transformer)
 
-tensors = Tensors.tensors
+tensors = Tensors.define
 field = attrs.field
