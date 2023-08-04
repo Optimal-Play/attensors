@@ -30,7 +30,8 @@ from typing import Annotated
 If we were to take for example the New York Real Estate Data as in [this](https://rosenfelder.ai/multi-input-neural-network-pytorch/) tutorial, there are multiple ways we could define our multi-tensor:
 
 ```python
-# Following the tutorial, 2 tensors are needed: one for image data, one for tabular data
+# Following the tutorial, 2 tensors are needed:
+# one for image data, one for tabular data
 @tensors
 class NYRealEstateData:
     image: Annotated[np.ndarray, {"dtype": np.float32, "shape": (3, 224, 224)}]
@@ -61,16 +62,16 @@ class NYRealEstateData:
     baths: int
 ```
 
-Instantiating can be done by simply providing the data, or via numpy styled routines. In the following context we consider 2 samples given with their respective tensors `img_1`, `tab_1` and  `img_2`, `tab_2`
+Instantiating can be done by simply providing the data, or via numpy styled routines. In the following context we consider 2 samples given with their respective tensors `i1`, `t1` and  `i2`, `t2`
 
 ```python
->>> sample = NYRealEstateData(image=[img_1, img_2], tabular=[tab_1, tab_2])
+>>> sample = NYRealEstateData(image=[i1, i2], tabular=[t1, t2])
 ```
 
 Since `NYRealEstateData` is actually a `numpy.ndarray` subclass, you could also define using numpy
 
 ```python
->>> sample = np.array([(img_1, tab_1), (img_2, tab_2)], dtype=NYRealEstateData._dtype).view(NYRealEstateData)
+>>> sample = np.array([(i1, t1), (i2, t2)], dtype=NYRealEstateData._dtype).view(NYRealEstateData)
 ```
 
 Generating dummy data can be easily done via shortcutted numpy routines
