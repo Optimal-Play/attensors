@@ -10,7 +10,7 @@
 
 Attensors was born out of the need to work with mixed input data for machine learning models, while keeping things tidy and have code self-documented.
 
-Working with mixed input data, we know the **shape** of each tensor component of a single input. This is often times found specified in intermediary preprocessing or data loading mechanisms (e.g. dataset schemas, tensor specs). Of course, all these tensors would have the same **"prefix" shape** referring global dimensions (such as `batch_size` or `sequence_size`).
+Working with mixed input data, we know the **shape** of each tensor component of a single input. This is often times found specified in intermediary preprocessing or data loading mechanisms (e.g. dataset schemas, tensor specs). All these tensors would have the same **"prefix" shape** referring global dimensions (such as `batch_size` or `sequence_size`).
 
 As problems and models get more complicated, so, too, do their inputs. These collections of input tensors are almost never defined as separate entities, instead being grouped in generic data structures such as dictionaries, lists or tuples.
 
