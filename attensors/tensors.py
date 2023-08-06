@@ -32,18 +32,11 @@ class _TensorsMetaclass(type):
 
     def get_implementation(cls, method):
         def mapped_method(method, *args, **kwargs):
-            if 'subok' in kwargs:
-                raise TypeError(f"{cls.__name__}.{method.__name__} " + \
-                    "got an unexpected keyword argument 'subok'")
-
             if cls is not Tensors:
                 if 'dtype' in kwargs:
                     raise TypeError(f"{cls.__name__}.{method.__name__} " + \
                         "got an unexpected keyword argument 'dtype'")
                 kwargs['dtype'] = cls._dtype
-            else:
-                if 'dtype' not in kwargs or np.dtype(kwargs['dtype']).names is None:
-                    raise TypeError(f"{cls.__name__}.{method.__name__} requires a structured dtype")
 
             return method(*args, **kwargs).view(cls)
 
@@ -358,7 +351,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             handles expected attr wrapped subclasses
         - on_setattr: makes sure setting attributes are mapped to the underlying np.ndarray fields.
             Adding more is possible as attrs supports this
-        - field_transformer: default field transformer to translate annotated fields to metadata
+        - field_transformer: default field transformer to translate annotated fields to metadata.
             Adding more is possible and works in the same manner as on_setattr
         """
         if 'slots' in kwargs or 'init' in kwargs:
@@ -388,6 +381,3 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             return lambda maybe_cls: decorate(maybe_cls, chained_field_transformer)
 
         return decorate(maybe_cls, chained_field_transformer)
-
-tensors = Tensors.define
-field = attrs.field

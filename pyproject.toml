@@ -24,10 +24,13 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
-  "Topic :: Software Development"
+  "Topic :: Software Development",
   "Typing :: Typed"
 ]
-dependencies = ["attrs>=21.3.0", "numpy>=1.20.1"]
+dependencies = [
+  "attrs>=21.3.0",
+  "numpy>=1.20.1"
+]
 
 [project.urls]
 Documentation = "https://github.com/Optimal-Play/attensors#readme"
@@ -35,40 +38,4 @@ Issues = "https://github.com/Optimal-Play/attensors/issues"
 Source = "https://github.com/Optimal-Play/attensors"
 
 [tool.hatch.version]
-path = "src/attensors/__about__.py"
-
-[tool.hatch.envs.default]
-dependencies = [
-  "coverage[toml]>=6.5",
-  "pytest",
-]
-[tool.hatch.envs.default.scripts]
-test = "pytest {args:tests}"
-test-cov = "coverage run -m pytest {args:tests}"
-cov-report = [
-  "- coverage combine",
-  "coverage report",
-]
-cov = [
-  "test-cov",
-  "cov-report",
-]
-
-[tool.coverage.run]
-source_pkgs = ["attensors", "tests"]
-branch = true
-parallel = true
-omit = [
-  "src/attensors/__about__.py",
-]
-
-[tool.coverage.paths]
-attensors = ["src/attensors", "*/attensors/src/attensors"]
-tests = ["tests", "*/attensors/tests"]
-
-[tool.coverage.report]
-exclude_lines = [
-  "no cov",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
-]
+path = "attensors/__init__.py"
