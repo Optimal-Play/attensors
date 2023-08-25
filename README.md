@@ -1,6 +1,6 @@
 <p align="center">
     <picture>
-        <img src="./docs/_static/logo_outlined.png" alt="attensors" />
+        <img src="https://github.com/Optimal-Play/attensors/blob/main/docs/_static/logo_outlined.png?raw=true" alt="attensors" />
     </picture>
 </p>
 
@@ -71,7 +71,7 @@ Instantiating can be done by simply providing the data, or via numpy styled rout
 Since `NYRealEstateData` is actually a `numpy.ndarray` subclass, you could also define using numpy
 
 ```python
->>> sample = np.array([(i1, t1), (i2, t2)], dtype=NYRealEstateData._dtype).view(NYRealEstateData)
+>>> sample = np.array([(i1, t1), (i2, t2)], dtype=NYRealEstateData.dtype).view(NYRealEstateData)
 ```
 
 Generating dummy data can be accomplished via shortcutted numpy routines.
@@ -93,6 +93,14 @@ All above examples will result in a sample with a prefix shape of (2,).
 
 Of course, indexing, [universal functions](#universal-functions) and classic array manipulation routines such as `reshape`, `stack`, `concatenate`  are also supported.
 You can read more about this in the [documentation](#documentation).
+
+## Installation
+
+Attensors is hosted on PyPI. The recommended way to install it is via pip:
+
+```
+$ pip install attensors
+```
 
 ## Documentation
 
@@ -140,7 +148,7 @@ Instead, the dtype is inferred from the class fields information (type and metad
 
 ### Indexing and attributes
 
-Classes defined with `@tensors`, in the style of attrs, will provide attributes corresponding to the underlying ndarray structured array fields. Besides this, classic ndarray attributes such as `shape` and `dtype` will also be available. Types defined with the decorator will also contain a `_dtype` attribute corresponding to the inferred numpy dtype, which is used upon instantiation.
+Classes defined with `@tensors`, in the style of attrs, will provide attributes corresponding to the underlying ndarray structured array fields. Besides this, classic ndarray attributes such as `shape` and `dtype` will also be available. Types defined with the decorator will also contain a `dtype` class attribute corresponding to the inferred numpy dtype, which is used upon instantiation.
 
 Indexing works in the same manner as it does with structured numpy arrays, however some type casting may occur, in the following manner:
 - Any indexing that would result in an unstructured array will be cast to ndarray

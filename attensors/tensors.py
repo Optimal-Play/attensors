@@ -1,6 +1,10 @@
+"""Main module containing structured numpy ndarray extension 
+with attrs functionalities.
+"""
+
 from functools import partial
-from typing import _AnnotatedAlias, Annotated, Any
-from attrs import define, field, fields
+from typing import _AnnotatedAlias, Any
+from attrs import define, fields
 
 import attrs
 import numpy as np
@@ -101,16 +105,18 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
 
         return np.asarray(mapped_inputs, dtype=cls._dtype).view(cls)
 
-    def __init__(self, *args, **kwargs):
-        if all([getattr(self, field.name, None) is not None for field in fields(self.__class__)]):
+    def __init__(self, *args, **kwargs): # pylint: disable=super-init-not-called,unused-argument
+        if all(getattr(self, field.name, None) is not None for field in fields(self.__class__)):
             return
 
+        # pylint: disable=no-member
         self.__attrs_init__(**{
             field.name: self[field.name] for field in fields(self.__class__)
         })
 
     def __array_finalize__(self, obj) -> None:
-        if obj is None: return
+        if obj is None: 
+            return
 
         if type(self) == Tensors:
             return
@@ -153,28 +159,28 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
 
         if ufunc.nout < 2 or method != "__call__":
             return self.__class__(**{
-                field_name: super(Tensors, self).__array_ufunc__(
+                field_name: super().__array_ufunc__(
                     ufunc, method, *[i[field_name] for i in broadcasted], **kwargs)
                 for field_name in self.dtype.names
-            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
-        elif ufunc.nout > 1:
+            }, shape=(broadcasted[0].shape if self.__class__ is Tensors else None))
+        if ufunc.nout > 1:
             results = {
-                field_name: super(Tensors, self).__array_ufunc__(
+                field_name: super().__array_ufunc__(
                     ufunc, method, *[i[field_name]for i in broadcasted], **kwargs)
                 for field_name in self.dtype.names
             }
-            return (self.__class_(**{
+            return (self.__class__(**{
                 field_name: results[field_name][i]
                 for field_name in self.dtype.names
-            }, shape=(broadcasted[0].shape if type(self) == Tensors else None))
+            }, shape=(broadcasted[0].shape if self.__class__ is Tensors else None))
             for i in range(len(list(results.values)[0])))
 
-        return super(Tensors, self).__array_ufunc__(ufunc, method, *inputs, **kwargs)
+        return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
 
     @classmethod
     def __base_constructor__(cls, inputs, shape, dtype, mc_shape):
         if len(inputs) == 0:
-                raise TypeError("Tensors() takes at least one argument (0 given)")
+            raise TypeError("Tensors() takes at least one argument (0 given)")
 
         if dtype:
             if not isinstance(dtype, np.dtype):
@@ -204,13 +210,13 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
                 (name, value.dtype, value.shape[len(shape):])
                 for name, value in inputs.items()
             ])
-        except:
-            raise TypeError(f"Shape mismatch. " + \
-                "Given shape should correspond to the shape prefix of each input array.")
+        except Exception as exc:
+            raise TypeError("Shape mismatch. " + \
+                "Given shape should correspond to the shape prefix of each input array.") from exc
 
-        if any([v.shape[:len(shape)] != shape or v.shape[len(shape):] != dtype[fn].shape
-                for fn, v in inputs.items()]):
-            raise TypeError(f"Shape mismatch. " + \
+        if any(v.shape[:len(shape)] != shape or v.shape[len(shape):] != dtype[fn].shape
+                for fn, v in inputs.items()):
+            raise TypeError("Shape mismatch. " + \
                 "Given shape should correspond to the shape prefix of each input array.")
 
         return inputs, dtype, shape
@@ -237,13 +243,13 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         for f, v in inputs.items():
             split = len(v.shape) if not len(cls_dtype[f].shape) else -len(cls_dtype[f].shape)
             if v.shape[split:] != cls_dtype[f].shape:
-                raise TypeError(f"Shape mismatch. " + \
+                raise TypeError("Shape mismatch. " + \
                     "Given shape should correspond to the shape prefix of each input array.")
             ext_shapes.append(v.shape[:split])
 
         ext_shapes = set(ext_shapes)
         if len(ext_shapes) > 1:
-            raise TypeError(f"Shape mismatch. " + \
+            raise TypeError("Shape mismatch. " + \
                 "Given shape should correspond to the shape prefix of each input array.")
 
         return inputs, cls_dtype, list(ext_shapes)[0]
@@ -274,7 +280,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
     @classmethod
     def broadcast_tensors(cls, *args):
         tensors = [arg for arg in args if isinstance(arg, Tensors)]
-        if not len(tensors):
+        if not tensors:
             raise ValueError("No tensors found in arguments.")
         init_dtype = tensors[0].dtype
         fields = set(arg.dtype.names for arg in tensors)
