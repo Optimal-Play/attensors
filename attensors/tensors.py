@@ -10,7 +10,7 @@ import attrs
 import numpy as np
 
 
-def on_setattr(instance, attrib, new_value):
+def _set_underlying_item(instance, attrib, new_value):
     if not getattr(instance, attrib.name, None):
         return setattr(instance, attrib.name, new_value)
     instance[attrib.name] = new_value
@@ -32,9 +32,9 @@ class _TensorsMetaclass(type):
         ]
 
         for method in mapped_methods:
-            setattr(cls, method, cls.get_implementation(method))
+            setattr(cls, method, cls._get_implementation(method=method))
 
-    def get_implementation(cls, method):
+    def _get_implementation(cls, method):
         def mapped_method(method, *args, **kwargs):
             if cls is not Tensors:
                 if 'dtype' in kwargs:
@@ -47,7 +47,7 @@ class _TensorsMetaclass(type):
         return partial(mapped_method, getattr(np, method))
 
 
-@define(slots=False, on_setattr=on_setattr)
+@define(slots=False, on_setattr=_set_underlying_item)
 class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
     """Extension of np.ndarray.
     Essentially, a structured array with defined rules for universal functions and
@@ -82,7 +82,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             otherwise it is set to ()
     """
     def __new__(cls, *args, shape=None, dtype=None, mc_shape=None, **kwargs):
-        for key in kwargs.keys():
+        for key in kwargs:
             if hasattr(np.ndarray, key):
                 raise TypeError(f"`{key}` is a np.ndarray reserved attribute and cannot be used.")
 
@@ -115,10 +115,10 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         })
 
     def __array_finalize__(self, obj) -> None:
-        if obj is None: 
+        if obj is None:
             return
 
-        if type(self) == Tensors:
+        if self.__class__ is Tensors:
             return
 
         if self._dtype != self.dtype:
@@ -132,7 +132,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         if ret.dtype.names is None:
             return ret.view(np.ndarray)
 
-        if type(self) is not Tensors and type(key) is str:
+        if self.__class__ is not Tensors and isinstance(key, str):
             if issubclass(getattr(fields(self.__class__), key).type, Tensors):
                 return ret.view(getattr(fields(self.__class__), key).type)
 
@@ -140,7 +140,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         if ret.dtype != self.dtype:
             return ret.view(Tensors)
 
-        if type(ret) == np.void:
+        if ret.__class__ is np.void:
             return np.asarray(ret).view(self.__class__)
 
         return ret
@@ -175,7 +175,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             }, shape=(broadcasted[0].shape if self.__class__ is Tensors else None))
             for i in range(len(list(results.values)[0])))
 
-        return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+        return NotImplemented
 
     @classmethod
     def __base_constructor__(cls, inputs, shape, dtype, mc_shape):
@@ -240,12 +240,13 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             raise TypeError(f"{cls.__name__} expected {n_required_args} arguments, got {n_args}")
 
         ext_shapes = []
-        for f, v in inputs.items():
-            split = len(v.shape) if not len(cls_dtype[f].shape) else -len(cls_dtype[f].shape)
-            if v.shape[split:] != cls_dtype[f].shape:
+        for field, value in inputs.items():
+            field_shape = cls_dtype[field].shape
+            split = len(value.shape) if not field_shape else -len(field_shape)
+            if value.shape[split:] != field_shape:
                 raise TypeError("Shape mismatch. " + \
                     "Given shape should correspond to the shape prefix of each input array.")
-            ext_shapes.append(v.shape[:split])
+            ext_shapes.append(value.shape[:split])
 
         ext_shapes = set(ext_shapes)
         if len(ext_shapes) > 1:
@@ -283,11 +284,11 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         if not tensors:
             raise ValueError("No tensors found in arguments.")
         init_dtype = tensors[0].dtype
-        fields = set(arg.dtype.names for arg in tensors)
-        if len(fields) > 1:
+        common_fields = set(arg.dtype.names for arg in tensors)
+        if len(common_fields) > 1:
             raise ValueError("Cannot broadcast tensors with different fields.")
 
-        field_names = list(fields)[0]
+        field_names = list(common_fields)[0]
         field_shapes = [
             np.broadcast_shapes(*[arg.dtype[fn].shape for arg in tensors])
             for fn in field_names
@@ -307,10 +308,10 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
             else:
                 arg_fields = {}
 
-                for fn, fshape in zip(field_names, field_shapes):
+                for fname, fshape in zip(field_names, field_shapes):
                     outer_slices = (slice(None),) * len(arg.shape)
-                    expand_dims = (None,) * (len(fshape) - len(arg.dtype[fn].shape))
-                    arg_fields[fn] = arg[fn][(*outer_slices, *expand_dims, ...)]
+                    expand_dims = (None,) * (len(fshape) - len(arg.dtype[fname].shape))
+                    arg_fields[fname] = arg[fname][(*outer_slices, *expand_dims, ...)]
 
                 arg = Tensors(**{
                     fn: np.broadcast_to(arg_fields[fn], (*outer_shape, *fshape), subok=True)
@@ -371,7 +372,7 @@ class Tensors(np.ndarray, metaclass=_TensorsMetaclass):
         def decorate(maybe_cls, chained_field_transformer):
             new_class = define(subclass(maybe_cls), **kwargs,
                 init=False, slots=False,
-                on_setattr=[*kwargs.get('on_setattr', []), on_setattr],
+                on_setattr=[*kwargs.get('on_setattr', []), _set_underlying_item],
                 field_transformer=chained_field_transformer)
 
             new_class._dtype = new_class.__infer_dtype__()
